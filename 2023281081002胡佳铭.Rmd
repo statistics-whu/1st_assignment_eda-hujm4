@@ -1,0 +1,199 @@
+---
+title: "1st_assignment_hujiaming"
+author: hujiaming
+documentclass: ctexart
+output:
+  rticles::ctex:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+---
+
+
+```{r setup, include = FALSE,echo = FALSE}
+knitr::opts_chunk$set(echo = FALSE,error = FALSE, warning = FALSE, message = FALSE,
+                      out.width = "100%", split = FALSE, fig.align = "center")
+
+
+#load library
+library(tidyverse)
+library(kableExtra)
+library(lubridate)
+library(scales)
+library(plotly)
+library(patchwork)
+library(ggrepel)
+library(wordcloud2)
+```
+
+# 数据介绍
+
+本报告**链家**数据获取方式如下：
+    
+报告人在2023年9月12日获取了[链家武汉二手房网站](https://wh.lianjia.com/ershoufang/)数据。
+    
+- 链家二手房网站默认显示100页，每页30套房产，因此本数据包括3000套房产信息；
+    
+- 数据包括了页面可见部分的文本信息，具体字段及说明见作业说明。
+
+ **说明：**数据仅用于教学；由于不清楚链家数据的展示规则，因此数据可能并不是武汉二手房市场的随机抽样，结论很可能有很大的偏差，甚至可能是错误的。
+```{r}
+# 载入数据和预处理
+
+lj<- read_csv("E:/1st_assignment_eda-hujm4-main/data/2023-09-12_cleaned.csv")
+# EDA ---------------------------------------------------------------------
+theme_set(theme(text = element_text(family="Arial",size = 10))) #这里family设置成你系统中的中文字体名。
+
+# 做一些数据预处理，比如把字符型变成factor。
+
+```
+# 数据概览
+
+数据表（lj)共包括`r names(lj)`等`r ncol(lj)`个变量,共`r nrow(lj)`行。表的前10行示例如下：
+
+```{r}
+lj %>% 
+  head(10) %>%
+  kable(caption = "武汉链家二手房") %>% 
+  kable_styling()
+```
+
+各变量的简短信息：
+```{r}
+glimpse(lj)
+```
+
+各变量的简短统计：
+```{r}
+summary(lj)
+```
+
+可以看到：
+
+- 直观结论1
+price_ttl房屋总价最大值1380万元，最小值10.6万元，中位数值137万元，均值155.9万元。
+
+- 直观结论2
+price_sqm每平方米均价最大值44656元，最小值1771元，中位数值14404元，均值15148元。
+
+- 直观结论3
+-部分数据存在异常值需要清洗，如房屋朝向（direction2）未填写正确值，部分数据填充为NA。在整个表格中，数值类型数据7列，字符类型数据11列，字符类型数据需要进一步处理分析。
+# 探索性分析
+
+## 变量price_sqm的数值描述与图形
+
+
+- 发现1
+
+- price_sqm变量数值描述
+最大值：44656
+最小值：1771
+中位数值：14404
+均值：15148
+标准差： 6323.175
+极差：1369.4
+```{r}
+sd(lj$price_sqm)
+diff(range(lj$price_ttl))#求标准差/极差
+
+```
+- price_sqm变量图形描述
+price_sqm变量图形描述：直方图描述与概率密度曲线
+将price_sqm的数据用直方图展示结果类似卡方分布，红色线条为该数据的概率密度曲线，蓝色线条为该数据在正态分布下的概率密度曲线，可以看出房屋的每平方米单价趋向于正态分布
+```{r}
+graph1 <- ggplot(data=lj,aes(x = lj$price_sqm))+
+  geom_histogram(aes(y = ..density..), 
+                 bins = 30, color = "grey")+stat_density(aes(group = 1), 
+                                                         fill = NA, color = "red") + 
+  stat_function(fun = function(x) dnorm(x, mean = 15148,sd=6323.175), col = "blue") +
+  theme_bw() 
+
+print(graph1)
+```
+-price_ttl变量图形描述：箱线图
+箱线图展示了变量的四分位、上下分界等数据特征，后续将把离群点数据作为异常值处理。
+```{r}
+graph2 <- ggplot(data.frame(x=lj$price_sqm),aes(x))+
+  stat_boxplot(geom="errorbar",
+               width=0.8,
+               aes(x=lj$price_sqm))+
+  geom_boxplot()+
+  scale_x_continuous(breaks = seq(0, 30000, by = 10000))+
+  theme_dark()
+graph2
+```
+## 变量decoration的数值描述与图形
+
+- decoration变量数值描述
+数据类型：character
+是否有空值：无 
+数据内容：："精装" "简装" "其他" "毛坯" 
+
+
+- decoration变量图形描述：直方图
+通过条形图可以看到精装是占比最高的58.6%，其次是简装21.1%，最后是毛坯14.5%,其他占比5.8%
+```{r}
+graph3 <-lj %>% 
+  group_by(decoration) %>% 
+  summarize(count = n()) %>% ##将装修情况分类并分别计数
+  mutate(percent = count/sum(count)) %>% 
+  ggplot(aes(x=decoration, y=count)) +
+  geom_col() +
+  geom_text(aes(label = paste0(round(100 * percent, 1), "%")), vjust = 2)+theme_bw()
+graph3
+```
+
+## 探索问题1
+-装修与房屋价格之间是否存在某种关系
+
+- 发现1
+以下是4种装修类别的房屋的单价展示出的箱线图，以及面积/房屋总价散点图，从箱线图中的四分位、散点图拟合直线的斜率中可以看出：精装修确实会让房屋的每平方米单价增高，但简装对房屋单价的影响并不大。
+```{r}
+
+graph4 <- ggplot(data=lj,aes(x=lj$decoration,y=lj$price_sqm))+
+  stat_boxplot(geom="errorbar",width=0.6,aes(x=lj$decoration,y=lj$price_sqm))+
+  geom_boxplot()+labs(title="单价与装修关系")+
+  theme_bw()
+graph4
+
+```
+```{r}
+p5 <-lj %>% filter(!price_ttl>500)%>% 
+  ggplot(aes(building_area,price_ttl,color=decoration))+
+  geom_point()+geom_smooth(formula = 'y ~ x',method  ="lm",se=FALSE)+
+  theme_classic()
+print(p5)
+```
+
+## 探索问题2
+
+- 在3000个样本中，热度最高的楼盘是哪些？它们的热度是否与地铁相关？
+
+- 以下是武汉最受关注的楼盘TOP50，其中最受欢迎的楼盘为十里和府，但它们的热度与是否靠近地铁的相关性不高。
+```{r}
+fol <- lj  %>% 
+  arrange(desc(followers)) %>% 
+  head(50)
+p10 <- ggplot(data=fol,aes(x=followers,y=reorder(property_name,followers)))+
+              geom_segment(aes(yend=reorder(property_name,followers),colour=near_subway),xend=0,size=2)+ geom_point(size=2)+theme_bw()+ labs(title="武汉最受关注的楼盘TOP50",x="关注人数", y = "楼盘名称")+ theme(legend.position=c(1,0.5))+ theme(panel.grid.major.y =element_blank(),panel.border = element_blank() )+ theme(axis.text.y = element_text(size = 5, color = "black"))+ theme(plot.title = element_text(hjust = 0.5,face = "bold",size = 15,colour = 'black'))
+p10
+    
+```
+## 探索问题3
+- 二手房户型分布与装修情况与样本数量的关系，3室两厅且为精装是样本数量最大的类型
+```{r}
+df3 <- data.frame(lj,st=paste(lj$bedrooms,lj$livingrooms, sep ="室"))
+p8 <-  ggplot(data=df3,aes(x=reorder(st,rep(-1,length(st)),sum),fill=decoration))+
+  scale_y_continuous(name="样本数量", limits=c(0, 1500))+
+  geom_bar(width = 0.7)+theme_bw()+labs(title = "武汉市二手房户型分布",x="",y="")+
+  theme(plot.title = element_text(hjust = 0.5,face = "bold",size = 15,colour = 'black'))+ 
+  theme(legend.position = c(0.8,0.3))+guides(fill=guide_legend(title=NULL))
+p8
+```
+
+# 发现总结
+对[链家武汉二手房网站](https://wh.lianjia.com/ershoufang/)的3000套房产信息分析后可以得出以下结论：
+1.样本数据中的二手房平均每平方米单价波动幅度较大，但整体近似服从平均值为15148，标准差为 6323.175的正态分布
+2.装修情况以精装修居多，精装修的样本占到了样本总量的58.6%
+3.装修程度与房屋单价呈现正相关（装修程度越好，房屋总价/面积的拟合直线斜率越大）
+4.从房屋结构的角度上分析，三室两厅是是样本数量最大的类型
